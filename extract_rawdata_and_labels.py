@@ -6,6 +6,14 @@ import sys
 import numpy as np
 import pandas as pd
 
+import cv2
+import pdb
+import json
+import pandas as pd
+import tensorflow as tf
+from google.protobuf import json_format
+from google.protobuf.json_format import MessageToDict
+
 from tqdm import tqdm
 from pathlib import Path
 from pyntcloud import PyntCloud
@@ -42,6 +50,85 @@ for file in tqdm(files):
     frame_number = 0
 
     for frame in frames:
+        timestamp = frame.timestamp_micros
+        context = frame.context
+        pose = frame.pose
+        laser_labels = frame.laser_labels
+        projected_lidar_labels = frame.projected_lidar_labels
+        camera_labels = frame.camera_labels
+
+        entry_dir = save_path_root + str(filename.split('/')[-1]).replace('.tfrecord', '')+ '/' + str(timestamp) + '/'
+        # print(entry_dir)
+        Path(entry_dir).mkdir(exist_ok=True)
+        # continue
+
+        # load and save pose
+        pose_json_str = json_format.MessageToJson(pose)
+        # context_json_bytes = context_json_str.encode('utf-8')
+        with open(entry_dir+"pose.json", "w") as file:
+            file.write(pose_json_str)
+ 
+        # load and save context
+        context_json_str = json_format.MessageToJson(context)
+        # context_json_bytes = context_json_str.encode('utf-8')
+        with open(entry_dir+"context.json", "w") as file:
+            file.write(context_json_str)
+
+        # load and save laser_labels
+        laser_label_msgs = [item for item in laser_labels]
+        serializable_laser_label_msgs = [MessageToDict(laser_label_msg) for laser_label_msg in laser_label_msgs]
+        laser_labels_json_string = json.dumps(serializable_laser_label_msgs, indent=4, sort_keys=True)
+        with open(entry_dir+"laser_labels.json", "w") as file:
+            file.write(laser_labels_json_string)
+
+        # load and save projected_lidar_labels
+        proj_lidar_labels = [item for item in projected_lidar_labels]
+        serializable_proj_lidar_labels = [MessageToDict(proj_lidar_label) for proj_lidar_label in proj_lidar_labels]
+        proj_lidar_labels_json_string = json.dumps(serializable_proj_lidar_labels, indent=4, sort_keys=True)
+        with open(entry_dir+"projected_lidar_labels.json", "w") as file:
+            file.write(proj_lidar_labels_json_string)
+
+        # load and save camera_labels
+        camera_label_messages = [item for item in camera_labels]
+        serializable_camera_labels = [MessageToDict(camera_label_message) for camera_label_message in camera_label_messages]
+        camera_labels_json_string = json.dumps(serializable_camera_labels, indent=4, sort_keys=True)
+        with open(entry_dir+"camera_labels.json", "w") as file:
+            file.write(camera_labels_json_string)
+
+        # pdb.set_trace()
+        # continue
+
+        # load and save images
+        for cam_image in frame.images:
+            cam_name_str = dataset_pb2.CameraName.Name.Name(cam_image.name)
+            image = tf.io.decode_jpeg(cam_image.image).numpy()
+            cam_save_path = entry_dir + cam_name_str +".jpg"
+            cv2.imwrite(cam_save_path, image)
+        # pdb.set_trace()
+        # continue
+
+        # load and save lidar
+        for laser in frame.lasers:
+            laser_name = dataset_pb2.LaserName.Name.DESCRIPTOR.values_by_number[laser.name].name
+            # print(laser_name)
+            laser_calibration = utils.get(frame.context.laser_calibrations, laser.name)
+            # Parse the top laser range image and get the associated projection.
+            ri, camera_projection, range_image_pose = utils.parse_range_image_and_camera_projection(laser)
+            # Convert the range image to a point cloud.
+            pcl, pcl_attr = utils.project_to_pointcloud(frame, ri, camera_projection, range_image_pose, laser_calibration)
+            pcl_with_attr = np.column_stack((pcl, pcl_attr))
+            entry_file = laser_name + '.ply'
+            save_path = os.path.join(entry_dir, entry_file)
+            dataframe = pd.DataFrame(data=pcl_with_attr,
+                                    columns=["x", "y", "z",                                    # nlz = "no label zone"
+                                            "range", "intensity", "elongation", "is_in_nlz"]) # (1 = in, -1 = not in)
+            cloud = PyntCloud(dataframe)
+            cloud.to_file(save_path)
+
+        # todo save full pointcloud
+
+        # pdb.set_trace()
+        continue
 
         num_points = 0
         num_features = 7
